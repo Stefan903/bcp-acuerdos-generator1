@@ -1,0 +1,684 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generador de Acuerdos BCP</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState } = React;
+
+        // Configuración de la API - CAMBIAR ESTA URL cuando despliegues el backend
+        const API_URL = 'http://localhost:5000/api';
+        // Para producción, cambia a: const API_URL = 'https://tu-backend.railway.app/api';
+
+        const BcpAgreementGenerator = () => {
+          const [activeTab, setActiveTab] = useState('generar');
+          const [cliente, setCliente] = useState({
+            idc: '',
+            nombre: '',
+            tipoDoc: 'DNI',
+            numDoc: '',
+            direccion: '',
+            distrito: '',
+            fechaPago: new Date().toISOString().split('T')[0]
+          });
+          const [productos, setProductos] = useState([]);
+          const [showProductForm, setShowProductForm] = useState(false);
+          const [editingIndex, setEditingIndex] = useState(null);
+          const [statusMessage, setStatusMessage] = useState('✓ Listo');
+          const [showProgress, setShowProgress] = useState(false);
+
+          const MESES = [
+            "ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO",
+            "JULIO", "AGOSTO", "SEPTIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"
+          ];
+
+          const ProductoForm = ({ producto, onSave, onClose }) => {
+            const [formData, setFormData] = useState(producto || {
+              producto: '',
+              cuenta: '',
+              deuda: '',
+              cancelacion: '',
+              cuotas: '',
+              moneda: 'PEN',
+              fechasPago: [new Date().toISOString().split('T')[0]],
+              montosPago: ['']
+            });
+
+            const agregarPago = () => {
+              setFormData({
+                ...formData,
+                fechasPago: [...formData.fechasPago, new Date().toISOString().split('T')[0]],
+                montosPago: [...formData.montosPago, '']
+              });
+            };
+
+            const eliminarPago = (index) => {
+              if (formData.fechasPago.length > 1) {
+                setFormData({
+                  ...formData,
+                  fechasPago: formData.fechasPago.filter((_, i) => i !== index),
+                  montosPago: formData.montosPago.filter((_, i) => i !== index)
+                });
+              }
+            };
+
+            const distribuirMonto = () => {
+              const total = parseFloat(formData.cancelacion) || 0;
+              const cuotas = parseInt(formData.cuotas) || formData.montosPago.length;
+              
+              if (cuotas <= 0 || total <= 0) return;
+
+              const montoPorCuota = total / cuotas;
+              const nuevasFechas = [];
+              const nuevosMontos = [];
+              const fechaBase = new Date();
+
+              for (let i = 0; i < cuotas; i++) {
+                const fecha = new Date(fechaBase);
+                fecha.setMonth(fecha.getMonth() + i);
+                nuevasFechas.push(fecha.toISOString().split('T')[0]);
+                nuevosMontos.push(i === cuotas - 1 ? 
+                  (total - (montoPorCuota * (cuotas - 1))).toFixed(2) : 
+                  montoPorCuota.toFixed(2)
+                );
+              }
+
+              setFormData({
+                ...formData,
+                fechasPago: nuevasFechas,
+                montosPago: nuevosMontos
+              });
+            };
+
+            const handleSubmit = () => {
+              if (!formData.producto || !formData.cuenta || !formData.deuda || !formData.cancelacion) {
+                alert('Por favor complete todos los campos obligatorios');
+                return;
+              }
+
+              const sumaMontos = formData.montosPago.reduce((sum, m) => sum + (parseFloat(m) || 0), 0);
+              const cancelacion = parseFloat(formData.cancelacion) || 0;
+              
+              if (Math.abs(sumaMontos - cancelacion) > 0.01 && formData.montosPago.some(m => m !== '')) {
+                alert('La suma de los pagos debe ser igual a la cancelación');
+                return;
+              }
+
+              onSave(formData);
+            };
+
+            return (
+              <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+                <div className="bg-gray-800 rounded-lg w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+                  <div className="p-6">
+                    <div className="flex justify-between items-center mb-6">
+                      <h3 className="text-xl font-bold text-white">📝 Datos del Producto</h3>
+                      <button onClick={onClose} className="text-gray-400 hover:text-white">
+                        ✕
+                      </button>
+                    </div>
+
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Producto:</label>
+                        <input
+                          type="text"
+                          value={formData.producto}
+                          onChange={(e) => setFormData({...formData, producto: e.target.value})}
+                          className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Cuenta:</label>
+                        <input
+                          type="text"
+                          value={formData.cuenta}
+                          onChange={(e) => setFormData({...formData, cuenta: e.target.value})}
+                          className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">Deuda:</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={formData.deuda}
+                            onChange={(e) => setFormData({...formData, deuda: e.target.value})}
+                            className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">Cancelación:</label>
+                          <input
+                            type="number"
+                            step="0.01"
+                            value={formData.cancelacion}
+                            onChange={(e) => setFormData({...formData, cancelacion: e.target.value})}
+                            className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Cuotas:</label>
+                        <input
+                          type="number"
+                          value={formData.cuotas}
+                          onChange={(e) => setFormData({...formData, cuotas: e.target.value})}
+                          className="w-full px-4 py-2 bg-gray-700 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="block text-sm font-medium text-gray-300 mb-2">Moneda:</label>
+                        <div className="flex gap-4">
+                          <label className="flex items-center text-white cursor-pointer">
+                            <input
+                              type="radio"
+                              value="PEN"
+                              checked={formData.moneda === 'PEN'}
+                              onChange={(e) => setFormData({...formData, moneda: e.target.value})}
+                              className="mr-2"
+                            />
+                            Soles (PEN)
+                          </label>
+                          <label className="flex items-center text-white cursor-pointer">
+                            <input
+                              type="radio"
+                              value="USD"
+                              checked={formData.moneda === 'USD'}
+                              onChange={(e) => setFormData({...formData, moneda: e.target.value})}
+                              className="mr-2"
+                            />
+                            Dólares (USD)
+                          </label>
+                        </div>
+                      </div>
+
+                      <div className="border-t border-gray-600 pt-4">
+                        <h4 className="text-lg font-bold text-white mb-4">💰 Partes de Pago</h4>
+                        
+                        {formData.fechasPago.map((fecha, index) => (
+                          <div key={index} className="flex gap-2 mb-3">
+                            <input
+                              type="date"
+                              value={fecha}
+                              onChange={(e) => {
+                                const nuevasFechas = [...formData.fechasPago];
+                                nuevasFechas[index] = e.target.value;
+                                setFormData({...formData, fechasPago: nuevasFechas});
+                              }}
+                              className="px-3 py-2 bg-gray-700 text-white rounded-lg"
+                            />
+                            <input
+                              type="number"
+                              step="0.01"
+                              value={formData.montosPago[index]}
+                              onChange={(e) => {
+                                const nuevosMontos = [...formData.montosPago];
+                                nuevosMontos[index] = e.target.value;
+                                setFormData({...formData, montosPago: nuevosMontos});
+                              }}
+                              placeholder="Monto"
+                              className="flex-1 px-3 py-2 bg-gray-700 text-white rounded-lg"
+                            />
+                            {formData.fechasPago.length > 1 && (
+                              <button
+                                onClick={() => eliminarPago(index)}
+                                className="px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        ))}
+
+                        <div className="flex gap-2 mt-4">
+                          <button
+                            onClick={agregarPago}
+                            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700"
+                          >
+                            ➕ Agregar Pago
+                          </button>
+                          <button
+                            onClick={distribuirMonto}
+                            className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                          >
+                            💵 Distribuir Monto
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="flex gap-4 pt-4">
+                        <button
+                          onClick={handleSubmit}
+                          className="flex-1 px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold"
+                        >
+                          ✓ {producto ? 'Actualizar' : 'Agregar'}
+                        </button>
+                        <button
+                          onClick={onClose}
+                          className="flex-1 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold"
+                        >
+                          ✕ Cancelar
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          };
+
+          const buscarCliente = async () => {
+            const idc = cliente.idc.trim();
+            if (!idc) {
+              alert('Por favor ingrese un IDC');
+              return;
+            }
+
+            setShowProgress(true);
+            setStatusMessage('🔍 Buscando cliente en la base de datos...');
+
+            try {
+              const response = await fetch(`${API_URL}/buscar-cliente/${idc}`);
+              
+              if (!response.ok) {
+                throw new Error('Cliente no encontrado');
+              }
+
+              const data = await response.json();
+              
+              setCliente({
+                ...cliente,
+                nombre: data.cliente.nombre,
+                tipoDoc: data.cliente.tipoDoc,
+                numDoc: data.cliente.numDoc,
+                direccion: data.cliente.direccion,
+                distrito: data.cliente.distrito
+              });
+
+              setProductos(data.productos);
+              setStatusMessage(`✓ Cliente encontrado: ${data.cliente.nombre} - ${data.productos.length} productos`);
+              
+            } catch (error) {
+              alert('Error al buscar cliente: ' + error.message);
+              setStatusMessage('✗ Error al buscar cliente');
+            } finally {
+              setShowProgress(false);
+            }
+          };
+
+          const limpiarDatos = () => {
+            if (window.confirm('¿Está seguro de limpiar todos los datos ingresados?')) {
+              setCliente({
+                idc: '',
+                nombre: '',
+                tipoDoc: 'DNI',
+                numDoc: '',
+                direccion: '',
+                distrito: '',
+                fechaPago: new Date().toISOString().split('T')[0]
+              });
+              setProductos([]);
+              setStatusMessage('✓ Todos los datos han sido limpiados');
+            }
+          };
+
+          const agregarProducto = () => {
+            setEditingIndex(null);
+            setShowProductForm(true);
+          };
+
+          const editarProducto = (index) => {
+            setEditingIndex(index);
+            setShowProductForm(true);
+          };
+
+          const eliminarProducto = (index) => {
+            if (window.confirm('¿Está seguro de eliminar este producto?')) {
+              setProductos(productos.filter((_, i) => i !== index));
+              setStatusMessage('✓ Producto eliminado correctamente');
+            }
+          };
+
+          const guardarProducto = (producto) => {
+            if (editingIndex !== null) {
+              const nuevosProductos = [...productos];
+              nuevosProductos[editingIndex] = producto;
+              setProductos(nuevosProductos);
+              setStatusMessage('✓ Producto actualizado correctamente');
+            } else {
+              setProductos([...productos, producto]);
+              setStatusMessage('✓ Producto agregado correctamente');
+            }
+            setShowProductForm(false);
+          };
+
+          const generarDocumento = async () => {
+            if (!cliente.nombre || !cliente.numDoc || !cliente.direccion || !cliente.distrito) {
+              alert('Por favor complete todos los campos del cliente');
+              return;
+            }
+
+            if (productos.length === 0) {
+              alert('Debe agregar al menos un producto');
+              return;
+            }
+
+            setShowProgress(true);
+            setStatusMessage('⏳ Generando documento Word...');
+
+            try {
+              const response = await fetch(`${API_URL}/generar-documento`, {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                  cliente: cliente,
+                  productos: productos
+                })
+              });
+
+              if (!response.ok) {
+                throw new Error('Error al generar documento');
+              }
+
+              const blob = await response.blob();
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = `ACUERDO_CANCELACION_${cliente.nombre.replace(/ /g, '_')}.docx`;
+              document.body.appendChild(a);
+              a.click();
+              window.URL.revokeObjectURL(url);
+              document.body.removeChild(a);
+              
+              setStatusMessage('✓ Documento Word generado exitosamente');
+              
+            } catch (error) {
+              alert('Error al generar documento: ' + error.message);
+              setStatusMessage('✗ Error al generar documento');
+            } finally {
+              setShowProgress(false);
+            }
+          };
+
+          return (
+            <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 p-4">
+              <div className="max-w-7xl mx-auto">
+                <div className="text-center mb-8 pt-8">
+                  <h1 className="text-4xl font-bold text-white mb-2">
+                    🏦 Generador de Acuerdos de Cancelación BCP
+                  </h1>
+                  <p className="text-blue-200">Sistema de generación de documentos de cancelación</p>
+                </div>
+
+                <div className="bg-gray-800 rounded-t-lg">
+                  <div className="flex gap-2 p-2">
+                    <button
+                      onClick={() => setActiveTab('generar')}
+                      className={`flex items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-colors ${
+                        activeTab === 'generar'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                      }`}
+                    >
+                      📄 Generar Acuerdo
+                    </button>
+                    <button
+                      onClick={() => setActiveTab('config')}
+                      className={`flex items-center gap-2 px-6 py-3 rounded-lg font-semibold transition-colors ${
+                        activeTab === 'config'
+                          ? 'bg-blue-600 text-white'
+                          : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+                      }`}
+                    >
+                      ⚙️ Configuración
+                    </button>
+                  </div>
+                </div>
+
+                <div className="bg-gray-800 rounded-b-lg p-6">
+                  {activeTab === 'generar' && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <div className="bg-gray-700 rounded-lg p-6">
+                        <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+                          👤 Datos del Cliente
+                        </h2>
+
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">IDC:</label>
+                            <div className="flex gap-2">
+                              <input
+                                type="text"
+                                value={cliente.idc}
+                                onChange={(e) => setCliente({...cliente, idc: e.target.value})}
+                                placeholder="Ingrese IDC del cliente"
+                                className="flex-1 px-4 py-2 bg-gray-600 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                              />
+                              <button
+                                onClick={buscarCliente}
+                                className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+                              >
+                                🔍 Buscar
+                              </button>
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Nombre Completo:</label>
+                            <input
+                              type="text"
+                              value={cliente.nombre}
+                              onChange={(e) => setCliente({...cliente, nombre: e.target.value})}
+                              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Tipo de Documento:</label>
+                            <div className="flex gap-4">
+                              {['DNI', 'CE', 'RUC'].map(tipo => (
+                                <label key={tipo} className="flex items-center text-white cursor-pointer">
+                                  <input
+                                    type="radio"
+                                    value={tipo}
+                                    checked={cliente.tipoDoc === tipo}
+                                    onChange={(e) => setCliente({...cliente, tipoDoc: e.target.value})}
+                                    className="mr-2"
+                                  />
+                                  {tipo}
+                                </label>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Número de Documento:</label>
+                            <input
+                              type="text"
+                              value={cliente.numDoc}
+                              onChange={(e) => setCliente({...cliente, numDoc: e.target.value})}
+                              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Dirección:</label>
+                            <input
+                              type="text"
+                              value={cliente.direccion}
+                              onChange={(e) => setCliente({...cliente, direccion: e.target.value})}
+                              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Distrito:</label>
+                            <input
+                              type="text"
+                              value={cliente.distrito}
+                              onChange={(e) => setCliente({...cliente, distrito: e.target.value})}
+                              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <div>
+                            <label className="block text-sm font-medium text-gray-300 mb-2">Fecha de Pago:</label>
+                            <input
+                              type="date"
+                              value={cliente.fechaPago}
+                              onChange={(e) => setCliente({...cliente, fechaPago: e.target.value})}
+                              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg focus:ring-2 focus:ring-blue-500"
+                            />
+                          </div>
+
+                          <button
+                            onClick={limpiarDatos}
+                            className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-red-600 text-white rounded-lg hover:bg-red-700 font-bold mt-4"
+                          >
+                            🗑️ Limpiar Todos los Datos
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="bg-gray-700 rounded-lg p-6">
+                        <h2 className="text-2xl font-bold text-white mb-6 flex items-center gap-2">
+                          📦 Productos
+                        </h2>
+
+                        <div className="bg-gray-600 rounded-lg overflow-hidden mb-4 max-h-96 overflow-y-auto">
+                          <table className="w-full text-white">
+                            <thead className="bg-blue-600 sticky top-0">
+                              <tr>
+                                <th className="px-3 py-2 text-left text-sm">Producto</th>
+                                <th className="px-3 py-2 text-left text-sm">Cuenta</th>
+                                <th className="px-3 py-2 text-right text-sm">Deuda</th>
+                                <th className="px-3 py-2 text-center text-sm">Acciones</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {productos.length === 0 ? (
+                                <tr>
+                                  <td colSpan="4" className="text-center py-8 text-gray-400">
+                                    No hay productos agregados
+                                  </td>
+                                </tr>
+                              ) : (
+                                productos.map((prod, index) => (
+                                  <tr key={index} className="border-t border-gray-500">
+                                    <td className="px-3 py-2 text-sm">{prod.producto}</td>
+                                    <td className="px-3 py-2 text-sm">{prod.cuenta}</td>
+                                    <td className="px-3 py-2 text-sm text-right">
+                                      {prod.moneda} {parseFloat(prod.deuda).toFixed(2)}
+                                    </td>
+                                    <td className="px-3 py-2 text-center">
+                                      <div className="flex gap-2 justify-center">
+                                        <button
+                                          onClick={() => editarProducto(index)}
+                                          className="p-1 bg-yellow-600 rounded hover:bg-yellow-700"
+                                        >
+                                          ✏️
+                                        </button>
+                                        <button
+                                          onClick={() => eliminarProducto(index)}
+                                          className="p-1 bg-red-600 rounded hover:bg-red-700"
+                                        >
+                                          🗑️
+                                        </button>
+                                      </div>
+                                    </td>
+                                  </tr>
+                                ))
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <button
+                          onClick={agregarProducto}
+                          className="w-full flex items-center justify-center gap-2 px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-bold mb-6"
+                        >
+                          ➕ Agregar Producto
+                        </button>
+
+                        <button
+                          onClick={generarDocumento}
+                          className="w-full flex items-center justify-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-bold text-lg"
+                        >
+                          📄 Generar Documento Word
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {activeTab === 'config' && (
+                    <div className="max-w-2xl mx-auto">
+                      <h2 className="text-2xl font-bold text-white mb-6">⚙️ Configuración</h2>
+                      
+                      <div className="bg-gray-700 rounded-lg p-6 mb-6">
+                        <h3 className="text-lg font-bold text-white mb-4">🔗 URL del Backend</h3>
+                        <input
+                          type="text"
+                          value={API_URL}
+                          readOnly
+                          className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg"
+                        />
+                        <p className="text-gray-400 text-sm mt-2">
+                          Configura esta URL en el código cuando despliegues el backend
+                        </p>
+                      </div>
+
+                      <div className="bg-gray-700 rounded-lg p-6">
+                        <h3 className="text-lg font-bold text-white mb-4">ℹ️ Información</h3>
+                        <p className="text-gray-300">
+                          Versión: 2.0 Web + Backend<br />
+                          Desarrollado para BCP<br />
+                          © 2025
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="bg-gray-800 rounded-lg p-4 mt-4 flex items-center justify-between">
+                  <span className="text-gray-300">{statusMessage}</span>
+                  {showProgress && (
+                    <div className="w-32 h-2 bg-gray-700 rounded-full overflow-hidden">
+                      <div className="h-full bg-blue-600 animate-pulse w-3/4"></div>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {showProductForm && (
+                <ProductoForm
+                  producto={editingIndex !== null ? productos[editingIndex] : null}
+                  onSave={guardarProducto}
+                  onClose={() => setShowProductForm(false)}
+                />
+              )}
+            </div>
+          );
+        };
+
+        ReactDOM.render(<BcpAgreementGenerator />, document.getElementById('root'));
+    </script>
+</body>
+</html>
